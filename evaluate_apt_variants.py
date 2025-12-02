@@ -10,9 +10,18 @@ This script evaluates APT variants (C1-C6) against ground truth samples using th
 
 import pandas as pd
 import re
+import sys
+import argparse
+import logging
 from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
 
 # MITRE ATT&CK Tactic Ordering (Cyber Kill Chain)
 TACTIC_ORDER = {
@@ -33,6 +42,9 @@ TACTIC_ORDER = {
 }
 
 # Technique to Tactic Mapping (simplified - common mappings)
+# NOTE: Some techniques appear in multiple tactics in MITRE ATT&CK (e.g., T1053, T1078)
+# When duplicates exist, the last mapping represents the primary/most common use case
+# This is a simplification for scoring purposes and provides consistent evaluation
 TECHNIQUE_TACTIC_MAP = {
     # Reconnaissance
     'T1595': 'reconnaissance', 'T1594': 'reconnaissance', 'T1593': 'reconnaissance',
@@ -350,6 +362,8 @@ def evaluate_same_objective(seed_sequence: str, candidate_sequence: str, apt_nam
 
 def evaluate_candidates(df: pd.DataFrame) -> pd.DataFrame:
     """Evaluate all candidates in the dataframe."""
+    logger = logging.getLogger(__name__)
+    
     for idx, row in df.iterrows():
         apt_name = row['apt']
         seed_sequence = row['seed_set_enriched']
@@ -378,17 +392,51 @@ def evaluate_candidates(df: pd.DataFrame) -> pd.DataFrame:
             so_result = evaluate_same_objective(seed_sequence, candidate_sequence, apt_name)
             df.at[idx, f'C{i}_SO'] = so_result
             
-            print(f"Processed: {apt_name} - {row['variant']} - C{i} (LC={lc_score}, OR={or_score}, SO={so_result})")
+            logger.info(f"Processed: {apt_name} - {row['variant']} - C{i} (LC={lc_score}, OR={or_score}, SO={so_result})")
     
     return df
 
 
 def main():
     """Main execution function."""
-    print("Loading APT variants data...")
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Evaluate APT variant candidates using LC, OR, and SO criteria'
+    )
+    parser.add_argument(
+        '-i', '--input',
+        default='TE-E2-RESULTS-VALIDATION.xlsx',
+        help='Input Excel file (default: TE-E2-RESULTS-VALIDATION.xlsx)'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        default='TE-E2-RESULTS-VALIDATED-FLATTENED-COMPLETED.csv',
+        help='Output CSV file (default: TE-E2-RESULTS-VALIDATED-FLATTENED-COMPLETED.csv)'
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    args = parser.parse_args()
+    
+    # Set logging level
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
+    logger = logging.getLogger(__name__)
+    logger.info("Loading APT variants data...")
     
     # Load the Excel file
-    df_raw = pd.read_excel('TE-E2-RESULTS-VALIDATION.xlsx', sheet_name='Judgements', header=None, skiprows=2)
+    try:
+        df_raw = pd.read_excel(args.input, sheet_name='Judgements', header=None, skiprows=2)
+    except FileNotFoundError:
+        logger.error(f"Input file not found: {args.input}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error loading Excel file: {e}")
+        sys.exit(1)
     
     # Define column names
     columns = [
@@ -401,27 +449,30 @@ def main():
     
     df_raw.columns = columns
     
-    print(f"Loaded {len(df_raw)} APT variants")
-    print("\nEvaluating candidates...")
+    logger.info(f"Loaded {len(df_raw)} APT variants")
+    logger.info("Evaluating candidates...")
     
     # Evaluate all candidates
     df_evaluated = evaluate_candidates(df_raw)
     
     # Save to CSV
-    output_file = 'TE-E2-RESULTS-VALIDATED-FLATTENED-COMPLETED.csv'
-    df_evaluated.to_csv(output_file, index=False)
+    try:
+        df_evaluated.to_csv(args.output, index=False)
+        logger.info(f"\nEvaluation complete! Results saved to {args.output}")
+    except Exception as e:
+        logger.error(f"Error saving output file: {e}")
+        sys.exit(1)
     
-    print(f"\nEvaluation complete! Results saved to {output_file}")
-    print(f"\nSummary statistics:")
-    print(f"Total variants evaluated: {len(df_evaluated)}")
+    logger.info(f"\nSummary statistics:")
+    logger.info(f"Total variants evaluated: {len(df_evaluated)}")
     
     # Print average scores
     lc_cols = [f'C{i}_LC' for i in range(1, 7)]
     or_cols = [f'C{i}_OR' for i in range(1, 7)]
     so_cols = [f'C{i}_SO' for i in range(1, 7)]
     
-    print(f"\nAverage Logical Coherence: {df_evaluated[lc_cols].mean().mean():.2f}")
-    print(f"Average Operational Realism: {df_evaluated[or_cols].mean().mean():.2f}")
+    logger.info(f"Average Logical Coherence: {df_evaluated[lc_cols].mean().mean():.2f}")
+    logger.info(f"Average Operational Realism: {df_evaluated[or_cols].mean().mean():.2f}")
     
     # Count Yes/No for Same Objective
     yes_count = 0
@@ -432,7 +483,7 @@ def main():
     
     total_so = yes_count + no_count
     if total_so > 0:
-        print(f"Same Objective - Yes: {yes_count} ({yes_count/total_so*100:.1f}%), No: {no_count} ({no_count/total_so*100:.1f}%)")
+        logger.info(f"Same Objective - Yes: {yes_count} ({yes_count/total_so*100:.1f}%), No: {no_count} ({no_count/total_so*100:.1f}%)")
 
 
 if __name__ == '__main__':
